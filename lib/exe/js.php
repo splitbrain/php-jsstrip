@@ -11,10 +11,6 @@ if(!defined('NOSESSION')) define('NOSESSION',true); // we do not use a session o
 if(!defined('NL')) define('NL',"\n");
 if(!defined('DOKU_DISABLE_GZIP_OUTPUT')) define('DOKU_DISABLE_GZIP_OUTPUT',1); // we gzip ourself here
 require_once(DOKU_INC.'inc/init.php');
-require_once(DOKU_INC.'inc/pageutils.php');
-require_once(DOKU_INC.'inc/httputils.php');
-require_once(DOKU_INC.'inc/io.php');
-require_once(DOKU_INC.'inc/JSON.php');
 
 // Main (don't run when UNIT test)
 if(!defined('SIMPLE_TEST')){
@@ -33,58 +29,66 @@ if(!defined('SIMPLE_TEST')){
 function js_out(){
     global $conf;
     global $lang;
+    global $config_cascade;
 
     // The generated script depends on some dynamic options
-    $cache = getCacheName('scripts'.$_SERVER['HTTP_HOST'].$_SERVER['SERVER_PORT'],'.js');
+    $cache = new cache('scripts'.$_SERVER['HTTP_HOST'].$_SERVER['SERVER_PORT'],'.js');
+    $cache->_event = 'JS_CACHE_USE';
+
+    // load minified version for some files
+    $min = $conf['compress'] ? '.min' : '';
 
     // array of core files
     $files = array(
+                DOKU_INC."lib/scripts/jquery/jquery$min.js",
+                DOKU_INC.'lib/scripts/jquery/jquery.cookie.js',
+                DOKU_INC."lib/scripts/jquery/jquery-ui$min.js",
+                DOKU_INC."lib/scripts/fileuploader.js",
+                DOKU_INC."lib/scripts/fileuploaderextended.js",
                 DOKU_INC.'lib/scripts/helpers.js',
-                DOKU_INC.'lib/scripts/events.js',
+                DOKU_INC.'lib/scripts/delay.js',
                 DOKU_INC.'lib/scripts/cookie.js',
                 DOKU_INC.'lib/scripts/script.js',
                 DOKU_INC.'lib/scripts/tw-sack.js',
-                DOKU_INC.'lib/scripts/ajax.js',
+                DOKU_INC.'lib/scripts/qsearch.js',
+                DOKU_INC.'lib/scripts/tree.js',
                 DOKU_INC.'lib/scripts/index.js',
                 DOKU_INC.'lib/scripts/drag.js',
                 DOKU_INC.'lib/scripts/textselection.js',
                 DOKU_INC.'lib/scripts/toolbar.js',
                 DOKU_INC.'lib/scripts/edit.js',
+                DOKU_INC.'lib/scripts/editor.js',
+                DOKU_INC.'lib/scripts/locktimer.js',
                 DOKU_INC.'lib/scripts/linkwiz.js',
                 DOKU_INC.'lib/scripts/media.js',
-                DOKU_TPLINC.'script.js',
+                DOKU_INC.'lib/scripts/compatibility.js',
+# disabled for FS#1958                DOKU_INC.'lib/scripts/hotkeys.js',
+                DOKU_INC.'lib/scripts/behaviour.js',
+                DOKU_INC.'lib/scripts/page.js',
+                tpl_incdir().'script.js',
             );
 
     // add possible plugin scripts and userscript
     $files   = array_merge($files,js_pluginscripts());
-    $files[] = DOKU_CONF.'userscript.js';
+    if(isset($config_cascade['userscript']['default'])){
+        $files[] = $config_cascade['userscript']['default'];
+    }
+
+    $cache_files = array_merge($files, getConfigFiles('main'));
+    $cache_files[] = __FILE__;
 
     // check cache age & handle conditional request
-    header('Cache-Control: public, max-age=3600');
-    header('Pragma: public');
-    if(js_cacheok($cache,$files)){
-        http_conditionalRequest(filemtime($cache));
-        if($conf['allowdebug']) header("X-CacheUsed: $cache");
-
-        // finally send output
-        if ($conf['gzip_output'] && http_gzip_valid($cache)) {
-            header('Vary: Accept-Encoding');
-            header('Content-Encoding: gzip');
-            readfile($cache.".gz");
-        } else {
-            if (!http_sendfile($cache)) readfile($cache);
-        }
-        return;
-    } else {
-        http_conditionalRequest(time());
-    }
+    // This may exit if a cache can be used
+    $cache_ok = $cache->useCache(array('files' => $cache_files));
+    http_cached($cache->cache, $cache_ok);
 
     // start output buffering and build the script
     ob_start();
 
     // add some global variables
     print "var DOKU_BASE   = '".DOKU_BASE."';";
-    print "var DOKU_TPL    = '".DOKU_TPL."';";
+    print "var DOKU_TPL    = '".tpl_basedir()."';";
+    // FIXME: Move those to JSINFO
     print "var DOKU_UHN    = ".((int) useHeading('navigation')).";";
     print "var DOKU_UHC    = ".((int) useHeading('content')).";";
 
@@ -94,7 +98,6 @@ function js_out(){
     echo 'LANG = '.$json->encode($lang['js']).";\n";
 
     // load toolbar
-    require_once(DOKU_INC.'inc/toolbar.php');
     toolbar_JSdefines('toolbar');
 
     // load files
@@ -104,17 +107,12 @@ function js_out(){
         echo "\n\n/* XXXXXXXXXX end of " . str_replace(DOKU_INC, '', $file) . " XXXXXXXXXX */\n\n";
     }
 
-
     // init stuff
-    js_runonstart("ajax_qsearch.init('qsearch__in','qsearch__out')");
-    js_runonstart("addEvent(document,'click',closePopups)");
-    js_runonstart('addTocToggle()');
-    js_runonstart("initSizeCtl('size__ctl','wiki__text')");
-    js_runonstart("initToolbar('tool__bar','wiki__text',toolbar)");
-    js_runonstart("initChangeCheck('".js_escape($lang['notsavedyet'])."')");
-    js_runonstart("locktimer.init(".($conf['locktime'] - 60).",'".js_escape($lang['willexpire'])."',".$conf['usedraft'].")");
-    js_runonstart('scrollToMarker()');
-    js_runonstart('focusMarker()');
+    if($conf['locktime'] != 0){
+        js_runonstart("dw_locktimer.init(".($conf['locktime'] - 60).",".$conf['usedraft'].")");
+    }
+    // init hotkeys - must have been done after init of toolbar
+# disabled for FS#1958    js_runonstart('initializeHotkeys()');
 
     // end output buffering and get contents
     $js = ob_get_contents();
@@ -127,18 +125,7 @@ function js_out(){
 
     $js .= "\n"; // https://bugzilla.mozilla.org/show_bug.cgi?id=316033
 
-    // save cache file
-    io_saveFile($cache,$js);
-    if(function_exists('gzopen')) io_saveFile("$cache.gz",$js);
-
-    // finally send output
-    if ($conf['gzip_output']) {
-        header('Vary: Accept-Encoding');
-        header('Content-Encoding: gzip');
-        print gzencode($js,9,FORCE_GZIP);
-    } else {
-        print $js;
-    }
+    http_cached_finish($cache->cache, $js);
 }
 
 /**
@@ -151,7 +138,7 @@ function js_load($file){
     static $loaded = array();
 
     $data = io_readFile($file);
-    while(preg_match('#/\*\s*DOKUWIKI:include(_once)?\s+([\w\./]+)\s*\*/#',$data,$match)){
+    while(preg_match('#/\*\s*DOKUWIKI:include(_once)?\s+([\w\.\-_/]+)\s*\*/#',$data,$match)){
         $ifile = $match[2];
 
         // is it a include_once?
@@ -170,32 +157,7 @@ function js_load($file){
         }
         $data  = str_replace($match[0],$idata,$data);
     }
-    echo $data;
-}
-
-/**
- * Checks if a JavaScript Cache file still is valid
- *
- * @author Andreas Gohr <andi@splitbrain.org>
- */
-function js_cacheok($cache,$files){
-    if(isset($_REQUEST['purge'])) return false; //support purge request
-
-    $ctime = @filemtime($cache);
-    if(!$ctime) return false; //There is no cache
-
-    // some additional files to check
-    $files = array_merge($files, getConfigFiles('main'));
-    $files[] = DOKU_CONF.'userscript.js';
-    $files[] = __FILE__;
-
-    // now walk the files
-    foreach($files as $file){
-        if(@filemtime($file) > $ctime){
-            return false;
-        }
-    }
-    return true;
+    echo "$data\n";
 }
 
 /**
@@ -256,7 +218,7 @@ function js_escape($string){
  * @author Andreas Gohr <andi@splitbrain.org>
  */
 function js_runonstart($func){
-    echo "addInitEvent(function(){ $func; });".NL;
+    echo "jQuery(function(){ $func; });".NL;
 }
 
 /**
@@ -282,7 +244,7 @@ function js_compress($s){
     // items that don't need spaces next to them
     $chars = "^&|!+\-*\/%=\?:;,{}()<>% \t\n\r'\"[]";
 
-    $regex_starters = array("(", "=", "[", "," , ":");
+    $regex_starters = array("(", "=", "[", "," , ":", "!");
 
     $whitespaces_chars = array(" ", "\t", "\n", "\r", "\0", "\x0B");
 
@@ -393,4 +355,4 @@ function js_compress($s){
     return trim($result);
 }
 
-//Setup VIM: ex: et ts=4 enc=utf-8 :
+//Setup VIM: ex: et ts=4 :
