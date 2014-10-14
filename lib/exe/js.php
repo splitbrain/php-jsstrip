@@ -43,6 +43,8 @@ function js_out(){
                 DOKU_INC."lib/scripts/jquery/jquery$min.js",
                 DOKU_INC.'lib/scripts/jquery/jquery.cookie.js',
                 DOKU_INC."lib/scripts/jquery/jquery-ui$min.js",
+                DOKU_INC."lib/scripts/jquery/jquery-migrate$min.js",
+                DOKU_INC.'inc/lang/'.$conf['lang'].'/jquery.ui.datepicker.js',
                 DOKU_INC."lib/scripts/fileuploader.js",
                 DOKU_INC."lib/scripts/fileuploaderextended.js",
                 DOKU_INC.'lib/scripts/helpers.js',
@@ -61,7 +63,7 @@ function js_out(){
                 DOKU_INC.'lib/scripts/locktimer.js',
                 DOKU_INC.'lib/scripts/linkwiz.js',
                 DOKU_INC.'lib/scripts/media.js',
-                DOKU_INC.'lib/scripts/compatibility.js',
+# deprecated                DOKU_INC.'lib/scripts/compatibility.js',
 # disabled for FS#1958                DOKU_INC.'lib/scripts/hotkeys.js',
                 DOKU_INC.'lib/scripts/behaviour.js',
                 DOKU_INC.'lib/scripts/page.js',
@@ -85,16 +87,25 @@ function js_out(){
     // start output buffering and build the script
     ob_start();
 
+    $json = new JSON();
     // add some global variables
     print "var DOKU_BASE   = '".DOKU_BASE."';";
     print "var DOKU_TPL    = '".tpl_basedir()."';";
+    print "var DOKU_COOKIE_PARAM = " . $json->encode(
+            array(
+                 'path' => empty($conf['cookiedir']) ? DOKU_REL : $conf['cookiedir'],
+                 'secure' => $conf['securecookie'] && is_ssl()
+            )).";";
     // FIXME: Move those to JSINFO
     print "var DOKU_UHN    = ".((int) useHeading('navigation')).";";
     print "var DOKU_UHC    = ".((int) useHeading('content')).";";
 
     // load JS specific translations
-    $json = new JSON();
     $lang['js']['plugins'] = js_pluginstrings();
+    $templatestrings = js_templatestrings();
+    if(!empty($templatestrings)) {
+        $lang['js']['template'] = $templatestrings;
+    }
     echo 'LANG = '.$json->encode($lang['js']).";\n";
 
     // load toolbar
@@ -102,11 +113,15 @@ function js_out(){
 
     // load files
     foreach($files as $file){
+        if(!file_exists($file)) continue;
         $ismin = (substr($file,-7) == '.min.js');
+        $debugjs = ($conf['allowdebug'] && strpos($file, DOKU_INC.'lib/scripts/') !== 0);
 
         echo "\n\n/* XXXXXXXXXX begin of ".str_replace(DOKU_INC, '', $file) ." XXXXXXXXXX */\n\n";
         if($ismin) echo "\n/* BEGIN NOCOMPRESS */\n";
+        if ($debugjs) echo "\ntry {\n";
         js_load($file);
+        if ($debugjs) echo "\n} catch (e) {\n   logError(e, '".str_replace(DOKU_INC, '', $file)."');\n}\n";
         if($ismin) echo "\n/* END NOCOMPRESS */\n";
         echo "\n\n/* XXXXXXXXXX end of " . str_replace(DOKU_INC, '', $file) . " XXXXXXXXXX */\n\n";
     }
@@ -121,6 +136,9 @@ function js_out(){
     // end output buffering and get contents
     $js = ob_get_contents();
     ob_end_clean();
+
+    // strip any source maps
+    stripsourcemaps($js);
 
     // compress whitespace and comments
     if($conf['compress']){
@@ -148,7 +166,10 @@ function js_load($file){
         // is it a include_once?
         if($match[1]){
             $base = utf8_basename($ifile);
-            if($loaded[$base]) continue;
+            if($loaded[$base]){
+                $data  = str_replace($match[0], '' ,$data);
+                continue;
+            }
             $loaded[$base] = true;
         }
 
@@ -186,8 +207,7 @@ function js_pluginscripts(){
  *
  * @author Gabriel Birke <birke@d-scribe.de>
  */
-function js_pluginstrings()
-{
+function js_pluginstrings() {
     global $conf;
     $pluginstrings = array();
     $plugins = plugin_list();
@@ -204,6 +224,27 @@ function js_pluginstrings()
         }
     }
     return $pluginstrings;
+}
+
+/**
+ * Return an two-dimensional array with strings from the language file of current active template.
+ *
+ * - $lang['js'] must be an array.
+ * - Nothing is returned for template without an entry for $lang['js']
+ */
+function js_templatestrings() {
+    global $conf;
+    $templatestrings = array();
+    if (@file_exists(tpl_incdir()."lang/en/lang.php")) {
+        include tpl_incdir()."lang/en/lang.php";
+    }
+    if (isset($conf['lang']) && $conf['lang']!='en' && @file_exists(tpl_incdir()."lang/".$conf['lang']."/lang.php")) {
+        include tpl_incdir()."lang/".$conf['lang']."/lang.php";
+    }
+    if (isset($lang['js'])) {
+        $templatestrings[$conf['template']] = $lang['js'];
+    }
+    return $templatestrings;
 }
 
 /**
@@ -247,6 +288,10 @@ function js_compress($s){
 
     // items that don't need spaces next to them
     $chars = "^&|!+\-*\/%=\?:;,{}()<>% \t\n\r'\"[]";
+
+    // items which need a space if the sign before and after whitespace is equal.
+    // E.g. '+ ++' may not be compressed to '+++' --> syntax error.
+    $ops = "+-";
 
     $regex_starters = array("(", "=", "[", "," , ":", "!");
 
@@ -301,10 +346,8 @@ function js_compress($s){
                 // now move forward and find the end of it
                 $j = 1;
                 while($s{$i+$j} != '/'){
-                    while( ($s{$i+$j} != '\\') && ($s{$i+$j} != '/')){
-                        $j = $j + 1;
-                    }
                     if($s{$i+$j} == '\\') $j = $j + 2;
+                    else $j++;
                 }
                 $result .= substr($s,$i,$j+1);
                 $i = $i + $j + 1;
@@ -350,19 +393,27 @@ function js_compress($s){
 
         // whitespaces
         if( $ch == ' ' || $ch == "\r" || $ch == "\n" || $ch == "\t" ){
-            // leading spaces
-            if($i+1 < $slen && (strpos($chars,$s[$i+1]) !== false)){
-                $i = $i + 1;
-                continue;
-            }
-            // trailing spaces
-            //  if this ch is space AND the last char processed
-            //  is special, then skip the space
             $lch = substr($result,-1);
-            if($lch && (strpos($chars,$lch) !== false)){
-                $i = $i + 1;
-                continue;
+
+            // Only consider deleting whitespace if the signs before and after
+            // are not equal and are not an operator which may not follow itself.
+            if ((!$lch || $s[$i+1] == ' ')
+                || $lch != $s[$i+1]
+                || strpos($ops,$s[$i+1]) === false) {
+                // leading spaces
+                if($i+1 < $slen && (strpos($chars,$s[$i+1]) !== false)){
+                    $i = $i + 1;
+                    continue;
+                }
+                // trailing spaces
+                //  if this ch is space AND the last char processed
+                //  is special, then skip the space
+                if($lch && (strpos($chars,$lch) !== false)){
+                    $i = $i + 1;
+                    continue;
+                }
             }
+
             // else after all of this convert the "whitespace" to
             // a single space.  It will get appended below
             $ch = ' ';
