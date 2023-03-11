@@ -3,6 +3,7 @@
 namespace splitbrain\JSStrip\tests;
 
 use PHPUnit\Framework\TestCase;
+use splitbrain\JSStrip\Exception;
 use splitbrain\JSStrip\JSStrip;
 
 class JSStripTest extends TestCase
@@ -132,8 +133,31 @@ class JSStripTest extends TestCase
      * @param string $output
      * @param string $file
      */
-    function testFileData($input, $output, $file)
+    public function testFileData($input, $output, $file)
     {
         $this->assertEquals($output, (new JSStrip())->compress($input), $file);
+    }
+
+    /**
+     * Test cases that should throw an exception
+     *
+     * @return array[] [input]
+     * @see testException
+     */
+    public function provideException() {
+        return [
+            ['foo /* BEGIN NOCOMPRESS */ we never end this block'],
+            ["/* we never end this comment"],
+        ];
+    }
+
+    /**
+     * @dataProvider provideException
+     * @param string $input
+     */
+    public function testException($input)
+    {
+        $this->expectException(Exception::class);
+        (new JSStrip())->compress($input);
     }
 }
