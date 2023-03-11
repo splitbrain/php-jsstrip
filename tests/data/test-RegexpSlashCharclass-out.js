@@ -1,0 +1,1 @@
+console.log('heya!');const regexWithSlashInIt=/[+\-*/],/;console.log('This here is all considered part of a regex starting with the last slash','So the whitespace is not compacted until here: /',);console.log('This is still commented out.');
