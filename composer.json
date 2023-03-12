@@ -2,7 +2,7 @@
     "name": "splitbrain/php-jsstrip",
     "description": "PHP based JavaScript minimizer",
     "type": "library",
-    "license": "BSD",
+    "license": "BSD-3-Clause",
     "autoload": {
         "psr-4": {
             "splitbrain\\JSStrip\\tests\\": "tests/",
